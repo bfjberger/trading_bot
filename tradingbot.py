@@ -5,6 +5,15 @@ from lumibot.traders import Trader
 from datetime import datetime
 from alpaca_trade_api import REST
 from timedelta import Timedelta 
+from finbert_utils import estimate_sentiment
+
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+import yfinance as yf
+# Correcting the period to '5d' or any other valid period
+data = yf.download('^IRX', period='5d')
+
+
 
 API_KEY = "PKBQVHG5MSFRQ898RSUF"
 API_SECRET = "BjxpbEyys4L4XsgqxLFfWbaX6ZA4QsUXyuZsvOMQ"
@@ -37,18 +46,20 @@ class MLTrader(Strategy):
         three_days_prior = today - Timedelta(days=3)
         return today.strftime('%Y-%m-%d'),  three_days_prior.strftime('%Y-%m-%d')
     
-    def get_news(self):
+    def get_sentiment(self):
         today, three_days_prior = self.get_dates( )
         news = self.api.get_news(symbol=self.symbol, start=three_days_prior, end=today)
         news = [ev.__dict__["_raw"]["headline"] for ev in news]
-        return news
+        probability, sentiment = estimate_sentiment(news)
+        return probability, sentiment
            
     def on_trading_iteration(self):
         cash, last_price, quantity = self.position_sizing()
+        probability, sentiment = self.get_sentiment()
         if cash > last_price:
-            news = self.get_news()
-            print(news)
-            if self.last_trade == None:
+            if sentiment=="positive" and probability > .999:
+                if self.last_trade == "sell":
+                    self.sell_all()
                 order = self.create_order(
                     self.symbol,
                     10,
@@ -59,8 +70,22 @@ class MLTrader(Strategy):
                 )
                 self.submit_order(order)
                 self.last_trade = "buy"
+        
+            elif sentiment=="negative" and probability > .999:
+                if self.last_trade == "buy":
+                    self.sell_all()
+                order = self.create_order(
+                    self.symbol,
+                    10,
+                    "sell",
+                    type="bracket",
+                    take_profit_price = last_price * .8,
+                    stop_loss_price = last_price * 1.05,
+                )
+                self.submit_order(order)
+                self.last_trade = "sell"
  
-start_date = datetime(2023, 12, 15)
+start_date = datetime(2023, 6, 1)
 end_date = datetime(2023, 12, 31)   
 
 broker = Alpaca(ALPACA_CREDS)
